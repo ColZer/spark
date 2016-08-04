@@ -19,10 +19,8 @@ package org.apache.spark.graphx.impl
 
 import scala.reflect.ClassTag
 
-import org.apache.spark.util.collection.BitSet
-
 import org.apache.spark.graphx._
-import org.apache.spark.graphx.util.collection.GraphXPrimitiveKeyOpenHashMap
+import org.apache.spark.util.collection.BitSet
 
 private[graphx] object VertexPartition {
   /** Construct a `VertexPartition` from the given vertices. */
@@ -38,8 +36,8 @@ private[graphx] object VertexPartition {
    * Implicit conversion to allow invoking `VertexPartitionBase` operations directly on a
    * `VertexPartition`.
    */
-  implicit def partitionToOps[VD: ClassTag](partition: VertexPartition[VD]) =
-    new VertexPartitionOps(partition)
+  implicit def partitionToOps[VD: ClassTag](partition: VertexPartition[VD])
+    : VertexPartitionOps[VD] = new VertexPartitionOps(partition)
 
   /**
    * Implicit evidence that `VertexPartition` is a member of the `VertexPartitionBaseOpsConstructor`

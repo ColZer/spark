@@ -21,74 +21,59 @@ import javax.servlet.http.HttpServletRequest
 
 import scala.xml.Node
 
-import org.apache.spark.ui.{WebUIPage, UIUtils}
+import org.apache.spark.ui.{UIUtils, WebUIPage}
 
-private[spark] class HistoryPage(parent: HistoryServer) extends WebUIPage("") {
-
-  private val pageSize = 20
+private[history] class HistoryPage(parent: HistoryServer) extends WebUIPage("") {
 
   def render(request: HttpServletRequest): Seq[Node] = {
-    val requestedPage = Option(request.getParameter("page")).getOrElse("1").toInt
-    val requestedFirst = (requestedPage - 1) * pageSize
+    val requestedIncomplete =
+      Option(request.getParameter("showIncomplete")).getOrElse("false").toBoolean
 
     val allApps = parent.getApplicationList()
-    val actualFirst = if (requestedFirst < allApps.size) requestedFirst else 0
-    val apps = allApps.slice(actualFirst, Math.min(actualFirst + pageSize, allApps.size))
+      .filter(_.completed != requestedIncomplete)
+    val allAppsSize = allApps.size
 
-    val actualPage = (actualFirst / pageSize) + 1
-    val last = Math.min(actualFirst + pageSize, allApps.size) - 1
-    val pageCount = allApps.size / pageSize + (if (allApps.size % pageSize > 0) 1 else 0)
-
-    val appTable = UIUtils.listingTable(appHeader, appRow, apps)
     val providerConfig = parent.getProviderConfig()
     val content =
-      <div class="row-fluid">
-        <div class="span12">
-          <ul class="unstyled">
-            {providerConfig.map { case (k, v) => <li><strong>{k}:</strong> {v}</li> }}
-          </ul>
-          {
-            if (allApps.size > 0) {
-              <h4>
-                Showing {actualFirst + 1}-{last + 1} of {allApps.size}
-                <span style="float: right">
-                  {if (actualPage > 1) <a href={"/?page=" + (actualPage - 1)}>&lt;</a>}
-                  {if (actualPage < pageCount) <a href={"/?page=" + (actualPage + 1)}>&gt;</a>}
-                </span>
-              </h4> ++
-              appTable
+      <div>
+          <div class="span12">
+            <ul class="unstyled">
+              {providerConfig.map { case (k, v) => <li><strong>{k}:</strong> {v}</li> }}
+            </ul>
+            {
+            if (allAppsSize > 0) {
+              <script src={UIUtils.prependBaseUri("/static/dataTables.rowsGroup.js")}></script> ++
+                <div id="history-summary" class="span12 pagination"></div> ++
+                <script src={UIUtils.prependBaseUri("/static/utils.js")}></script> ++
+                <script src={UIUtils.prependBaseUri("/static/historypage.js")}></script>
+            } else if (requestedIncomplete) {
+              <h4>No incomplete applications found!</h4>
             } else {
-              <h4>No Completed Applications Found</h4>
+              <h4>No completed applications found!</h4> ++
+                <p>Did you specify the correct logging directory?
+                  Please verify your setting of <span style="font-style:italic">
+                  spark.history.fs.logDirectory</span> and whether you have the permissions to
+                  access it.<br /> It is also possible that your application did not run to
+                  completion or did not stop the SparkContext.
+                </p>
             }
-          }
-        </div>
+            }
+
+            <a href={makePageLink(!requestedIncomplete)}>
+              {
+              if (requestedIncomplete) {
+                "Back to completed applications"
+              } else {
+                "Show incomplete applications"
+              }
+              }
+            </a>
+          </div>
       </div>
-    UIUtils.basicSparkPage(content, "History Server")
+    UIUtils.basicSparkPage(content, "History Server", true)
   }
 
-  private val appHeader = Seq(
-    "App ID",
-    "App Name",
-    "Started",
-    "Completed",
-    "Duration",
-    "Spark User",
-    "Last Updated")
-
-  private def appRow(info: ApplicationHistoryInfo): Seq[Node] = {
-    val uiAddress = HistoryServer.UI_PATH_PREFIX + s"/${info.id}"
-    val startTime = UIUtils.formatDate(info.startTime)
-    val endTime = UIUtils.formatDate(info.endTime)
-    val duration = UIUtils.formatDuration(info.endTime - info.startTime)
-    val lastUpdated = UIUtils.formatDate(info.lastUpdated)
-    <tr>
-      <td><a href={uiAddress}>{info.id}</a></td>
-      <td>{info.name}</td>
-      <td>{startTime}</td>
-      <td>{endTime}</td>
-      <td>{duration}</td>
-      <td>{info.sparkUser}</td>
-      <td>{lastUpdated}</td>
-    </tr>
+  private def makePageLink(showIncomplete: Boolean): String = {
+    UIUtils.prependBaseUri("/?" + "showIncomplete=" + showIncomplete)
   }
 }

@@ -17,83 +17,83 @@
 
 package org.apache.spark.streaming.scheduler
 
-import org.apache.spark.Logging
-import scala.collection.mutable.{SynchronizedBuffer, ArrayBuffer}
-import java.util.concurrent.LinkedBlockingQueue
+import org.apache.spark.scheduler.{LiveListenerBus, SparkListener, SparkListenerEvent}
+import org.apache.spark.util.ListenerBus
 
-/** Asynchronously passes StreamingListenerEvents to registered StreamingListeners. */
-private[spark] class StreamingListenerBus() extends Logging {
-  private val listeners = new ArrayBuffer[StreamingListener]()
-    with SynchronizedBuffer[StreamingListener]
+/**
+ * A Streaming listener bus to forward events to StreamingListeners. This one will wrap received
+ * Streaming events as WrappedStreamingListenerEvent and send them to Spark listener bus. It also
+ * registers itself with Spark listener bus, so that it can receive WrappedStreamingListenerEvents,
+ * unwrap them as StreamingListenerEvent and dispatch them to StreamingListeners.
+ */
+private[streaming] class StreamingListenerBus(sparkListenerBus: LiveListenerBus)
+  extends SparkListener with ListenerBus[StreamingListener, StreamingListenerEvent] {
 
-  /* Cap the capacity of the SparkListenerEvent queue so we get an explicit error (rather than
-   * an OOM exception) if it's perpetually being added to more quickly than it's being drained. */
-  private val EVENT_QUEUE_CAPACITY = 10000
-  private val eventQueue = new LinkedBlockingQueue[StreamingListenerEvent](EVENT_QUEUE_CAPACITY)
-  private var queueFullErrorMessageLogged = false
+  /**
+   * Post a StreamingListenerEvent to the Spark listener bus asynchronously. This event will be
+   * dispatched to all StreamingListeners in the thread of the Spark listener bus.
+   */
+  def post(event: StreamingListenerEvent) {
+    sparkListenerBus.post(new WrappedStreamingListenerEvent(event))
+  }
 
-  val listenerThread = new Thread("StreamingListenerBus") {
-    setDaemon(true)
-    override def run() {
-      while (true) {
-        val event = eventQueue.take
-        event match {
-          case receiverStarted: StreamingListenerReceiverStarted =>
-            listeners.foreach(_.onReceiverStarted(receiverStarted))
-          case receiverError: StreamingListenerReceiverError =>
-            listeners.foreach(_.onReceiverError(receiverError))
-          case receiverStopped: StreamingListenerReceiverStopped =>
-            listeners.foreach(_.onReceiverStopped(receiverStopped))
-          case batchSubmitted: StreamingListenerBatchSubmitted =>
-            listeners.foreach(_.onBatchSubmitted(batchSubmitted))
-          case batchStarted: StreamingListenerBatchStarted =>
-            listeners.foreach(_.onBatchStarted(batchStarted))
-          case batchCompleted: StreamingListenerBatchCompleted =>
-            listeners.foreach(_.onBatchCompleted(batchCompleted))
-          case StreamingListenerShutdown =>
-            // Get out of the while loop and shutdown the daemon thread
-            return
-          case _ =>
-        }
-      }
+  override def onOtherEvent(event: SparkListenerEvent): Unit = {
+    event match {
+      case WrappedStreamingListenerEvent(e) =>
+        postToAll(e)
+      case _ =>
     }
   }
 
-  def start() {
-    listenerThread.start()
-  }
-
-  def addListener(listener: StreamingListener) {
-    listeners += listener
-  }
-
-  def post(event: StreamingListenerEvent) {
-    val eventAdded = eventQueue.offer(event)
-    if (!eventAdded && !queueFullErrorMessageLogged) {
-      logError("Dropping StreamingListenerEvent because no remaining room in event queue. " +
-        "This likely means one of the StreamingListeners is too slow and cannot keep up with the " +
-        "rate at which events are being started by the scheduler.")
-      queueFullErrorMessageLogged = true
+  protected override def doPostEvent(
+      listener: StreamingListener,
+      event: StreamingListenerEvent): Unit = {
+    event match {
+      case receiverStarted: StreamingListenerReceiverStarted =>
+        listener.onReceiverStarted(receiverStarted)
+      case receiverError: StreamingListenerReceiverError =>
+        listener.onReceiverError(receiverError)
+      case receiverStopped: StreamingListenerReceiverStopped =>
+        listener.onReceiverStopped(receiverStopped)
+      case batchSubmitted: StreamingListenerBatchSubmitted =>
+        listener.onBatchSubmitted(batchSubmitted)
+      case batchStarted: StreamingListenerBatchStarted =>
+        listener.onBatchStarted(batchStarted)
+      case batchCompleted: StreamingListenerBatchCompleted =>
+        listener.onBatchCompleted(batchCompleted)
+      case outputOperationStarted: StreamingListenerOutputOperationStarted =>
+        listener.onOutputOperationStarted(outputOperationStarted)
+      case outputOperationCompleted: StreamingListenerOutputOperationCompleted =>
+        listener.onOutputOperationCompleted(outputOperationCompleted)
+      case _ =>
     }
   }
 
   /**
-   * Waits until there are no more events in the queue, or until the specified time has elapsed.
-   * Used for testing only. Returns true if the queue has emptied and false is the specified time
-   * elapsed before the queue emptied.
+   * Register this one with the Spark listener bus so that it can receive Streaming events and
+   * forward them to StreamingListeners.
    */
-  def waitUntilEmpty(timeoutMillis: Int): Boolean = {
-    val finishTime = System.currentTimeMillis + timeoutMillis
-    while (!eventQueue.isEmpty) {
-      if (System.currentTimeMillis > finishTime) {
-        return false
-      }
-      /* Sleep rather than using wait/notify, because this is used only for testing and wait/notify
-       * add overhead in the general case. */
-      Thread.sleep(10)
-    }
-    true
+  def start(): Unit = {
+    sparkListenerBus.addListener(this) // for getting callbacks on spark events
   }
 
-  def stop(): Unit = post(StreamingListenerShutdown)
+  /**
+   * Unregister this one with the Spark listener bus and all StreamingListeners won't receive any
+   * events after that.
+   */
+  def stop(): Unit = {
+    sparkListenerBus.removeListener(this)
+  }
+
+  /**
+   * Wrapper for StreamingListenerEvent as SparkListenerEvent so that it can be posted to Spark
+   * listener bus.
+   */
+  private case class WrappedStreamingListenerEvent(streamingListenerEvent: StreamingListenerEvent)
+    extends SparkListenerEvent {
+
+    // Do not log streaming events in event log as history server does not support streaming
+    // events (SPARK-12140). TODO Once SPARK-12140 is resolved we should set it to true.
+    protected[spark] override def logEvent: Boolean = false
+  }
 }

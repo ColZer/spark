@@ -19,8 +19,8 @@ package org.apache.spark.streaming.scheduler
 
 import scala.collection.mutable.Queue
 
-import org.apache.spark.util.Distribution
 import org.apache.spark.annotation.DeveloperApi
+import org.apache.spark.util.Distribution
 
 /**
  * :: DeveloperApi ::
@@ -39,6 +39,14 @@ case class StreamingListenerBatchCompleted(batchInfo: BatchInfo) extends Streami
 case class StreamingListenerBatchStarted(batchInfo: BatchInfo) extends StreamingListenerEvent
 
 @DeveloperApi
+case class StreamingListenerOutputOperationStarted(outputOperationInfo: OutputOperationInfo)
+  extends StreamingListenerEvent
+
+@DeveloperApi
+case class StreamingListenerOutputOperationCompleted(outputOperationInfo: OutputOperationInfo)
+  extends StreamingListenerEvent
+
+@DeveloperApi
 case class StreamingListenerReceiverStarted(receiverInfo: ReceiverInfo)
   extends StreamingListenerEvent
 
@@ -49,9 +57,6 @@ case class StreamingListenerReceiverError(receiverInfo: ReceiverInfo)
 @DeveloperApi
 case class StreamingListenerReceiverStopped(receiverInfo: ReceiverInfo)
   extends StreamingListenerEvent
-
-/** An event used in the listener to shutdown the listener daemon thread. */
-private[scheduler] case object StreamingListenerShutdown extends StreamingListenerEvent
 
 /**
  * :: DeveloperApi ::
@@ -78,6 +83,14 @@ trait StreamingListener {
 
   /** Called when processing of a batch of jobs has completed. */
   def onBatchCompleted(batchCompleted: StreamingListenerBatchCompleted) { }
+
+  /** Called when processing of a job of a batch has started. */
+  def onOutputOperationStarted(
+      outputOperationStarted: StreamingListenerOutputOperationStarted) { }
+
+  /** Called when processing of a job of a batch has completed. */
+  def onOutputOperationCompleted(
+      outputOperationCompleted: StreamingListenerOutputOperationCompleted) { }
 }
 
 

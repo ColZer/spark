@@ -17,52 +17,59 @@
 
 package org.apache.spark.sql.hive.thriftserver
 
-import scala.collection.JavaConversions._
+import java.util.{ArrayList => JArrayList, Arrays, List => JList}
 
-import java.util.{ArrayList => JArrayList}
+import scala.collection.JavaConverters._
 
-import org.apache.commons.lang.exception.ExceptionUtils
+import org.apache.commons.lang3.exception.ExceptionUtils
 import org.apache.hadoop.hive.metastore.api.{FieldSchema, Schema}
 import org.apache.hadoop.hive.ql.Driver
 import org.apache.hadoop.hive.ql.processors.CommandProcessorResponse
 
-import org.apache.spark.Logging
-import org.apache.spark.sql.hive.{HiveContext, HiveMetastoreTypes}
+import org.apache.spark.internal.Logging
+import org.apache.spark.sql.{AnalysisException, SQLContext}
+import org.apache.spark.sql.execution.QueryExecution
 
-private[hive] class SparkSQLDriver(val context: HiveContext = SparkSQLEnv.hiveContext)
-  extends Driver with Logging {
 
-  private var tableSchema: Schema = _
-  private var hiveResponse: Seq[String] = _
+private[hive] class SparkSQLDriver(val context: SQLContext = SparkSQLEnv.sqlContext)
+  extends Driver
+  with Logging {
+
+  private[hive] var tableSchema: Schema = _
+  private[hive] var hiveResponse: Seq[String] = _
 
   override def init(): Unit = {
   }
 
-  private def getResultSetSchema(query: context.QueryExecution): Schema = {
+  private def getResultSetSchema(query: QueryExecution): Schema = {
     val analyzed = query.analyzed
     logDebug(s"Result Schema: ${analyzed.output}")
-    if (analyzed.output.size == 0) {
-      new Schema(new FieldSchema("Response code", "string", "") :: Nil, null)
+    if (analyzed.output.isEmpty) {
+      new Schema(Arrays.asList(new FieldSchema("Response code", "string", "")), null)
     } else {
       val fieldSchemas = analyzed.output.map { attr =>
-        new FieldSchema(attr.name, HiveMetastoreTypes.toMetastoreType(attr.dataType), "")
+        new FieldSchema(attr.name, attr.dataType.catalogString, "")
       }
 
-      new Schema(fieldSchemas, null)
+      new Schema(fieldSchemas.asJava, null)
     }
   }
 
   override def run(command: String): CommandProcessorResponse = {
     // TODO unify the error code
     try {
-      val execution = context.executePlan(context.sql(command).logicalPlan)
-      hiveResponse = execution.stringResult()
+      context.sparkContext.setJobDescription(command)
+      val execution = context.sessionState.executePlan(context.sql(command).logicalPlan)
+      hiveResponse = execution.hiveResultString()
       tableSchema = getResultSetSchema(execution)
       new CommandProcessorResponse(0)
     } catch {
-      case cause: Throwable =>
-        logError(s"Failed in [$command]", cause)
-        new CommandProcessorResponse(0, ExceptionUtils.getFullStackTrace(cause), null)
+        case ae: AnalysisException =>
+          logDebug(s"Failed in [$command]", ae)
+          new CommandProcessorResponse(1, ExceptionUtils.getStackTrace(ae), null, ae)
+        case cause: Throwable =>
+          logError(s"Failed in [$command]", cause)
+          new CommandProcessorResponse(1, ExceptionUtils.getStackTrace(cause), null, cause)
     }
   }
 
@@ -72,17 +79,17 @@ private[hive] class SparkSQLDriver(val context: HiveContext = SparkSQLEnv.hiveCo
     0
   }
 
-  override def getSchema: Schema = tableSchema
-
-  override def getResults(res: JArrayList[String]): Boolean = {
+  override def getResults(res: JList[_]): Boolean = {
     if (hiveResponse == null) {
       false
     } else {
-      res.addAll(hiveResponse)
+      res.asInstanceOf[JArrayList[String]].addAll(hiveResponse.asJava)
       hiveResponse = null
       true
     }
   }
+
+  override def getSchema: Schema = tableSchema
 
   override def destroy() {
     super.destroy()

@@ -17,42 +17,16 @@
 
 package org.apache.spark.graphx.impl
 
-import scala.reflect.ClassTag
-
-import org.apache.spark.Partitioner
-import org.apache.spark.rdd.RDD
-import org.apache.spark.rdd.ShuffledRDD
-import org.apache.spark.util.collection.{BitSet, PrimitiveVector}
-
 import org.apache.spark.graphx._
 import org.apache.spark.graphx.util.collection.GraphXPrimitiveKeyOpenHashMap
-
-import org.apache.spark.graphx.impl.RoutingTablePartition.RoutingTableMessage
-
-private[graphx]
-class RoutingTableMessageRDDFunctions(self: RDD[RoutingTableMessage]) {
-  /** Copartition an `RDD[RoutingTableMessage]` with the vertex RDD with the given `partitioner`. */
-  def copartitionWithVertices(partitioner: Partitioner): RDD[RoutingTableMessage] = {
-    new ShuffledRDD[VertexId, Int, Int](
-      self, partitioner).setSerializer(new RoutingTableMessageSerializer)
-  }
-}
-
-private[graphx]
-object RoutingTableMessageRDDFunctions {
-  import scala.language.implicitConversions
-
-  implicit def rdd2RoutingTableMessageRDDFunctions(rdd: RDD[RoutingTableMessage]) = {
-    new RoutingTableMessageRDDFunctions(rdd)
-  }
-}
+import org.apache.spark.util.collection.{BitSet, PrimitiveVector}
 
 private[graphx]
 object RoutingTablePartition {
   /**
    * A message from an edge partition to a vertex specifying the position in which the edge
    * partition references the vertex (src, dst, or both). The edge partition is encoded in the lower
-   * 30 bytes of the Int, and the position is encoded in the upper 2 bytes of the Int.
+   * 30 bits of the Int, and the position is encoded in the upper 2 bits of the Int.
    */
   type RoutingTableMessage = (VertexId, Int)
 
@@ -74,11 +48,9 @@ object RoutingTablePartition {
     // Determine which positions each vertex id appears in using a map where the low 2 bits
     // represent src and dst
     val map = new GraphXPrimitiveKeyOpenHashMap[VertexId, Byte]
-    edgePartition.srcIds.iterator.foreach { srcId =>
-      map.changeValue(srcId, 0x1, (b: Byte) => (b | 0x1).toByte)
-    }
-    edgePartition.dstIds.iterator.foreach { dstId =>
-      map.changeValue(dstId, 0x2, (b: Byte) => (b | 0x2).toByte)
+    edgePartition.iterator.foreach { e =>
+      map.changeValue(e.srcId, 0x1, (b: Byte) => (b | 0x1).toByte)
+      map.changeValue(e.dstId, 0x2, (b: Byte) => (b | 0x2).toByte)
     }
     map.iterator.map { vidAndPosition =>
       val vid = vidAndPosition._1
@@ -130,10 +102,10 @@ private[graphx]
 class RoutingTablePartition(
     private val routingTable: Array[(Array[VertexId], BitSet, BitSet)]) extends Serializable {
   /** The maximum number of edge partitions this `RoutingTablePartition` is built to join with. */
-  val numEdgePartitions: Int = routingTable.size
+  val numEdgePartitions: Int = routingTable.length
 
   /** Returns the number of vertices that will be sent to the specified edge partition. */
-  def partitionSize(pid: PartitionID): Int = routingTable(pid)._1.size
+  def partitionSize(pid: PartitionID): Int = routingTable(pid)._1.length
 
   /** Returns an iterator over all vertex ids stored in this `RoutingTablePartition`. */
   def iterator: Iterator[VertexId] = routingTable.iterator.flatMap(_._1.iterator)

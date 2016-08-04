@@ -19,19 +19,24 @@ package org.apache.spark.mllib.regression
 
 import scala.util.Random
 
-import org.jblas.DoubleMatrix
-import org.scalatest.FunSuite
-
+import org.apache.spark.SparkFunSuite
 import org.apache.spark.mllib.linalg.Vectors
-import org.apache.spark.mllib.util.{LocalClusterSparkContext, LinearDataGenerator,
-  LocalSparkContext}
+import org.apache.spark.mllib.util.{LinearDataGenerator, LocalClusterSparkContext,
+  MLlibTestSparkContext}
+import org.apache.spark.util.Utils
 
-class RidgeRegressionSuite extends FunSuite with LocalSparkContext {
+private object RidgeRegressionSuite {
 
-  def predictionError(predictions: Seq[Double], input: Seq[LabeledPoint]) = {
+  /** 3 features */
+  val model = new RidgeRegressionModel(weights = Vectors.dense(0.1, 0.2, 0.3), intercept = 0.5)
+}
+
+class RidgeRegressionSuite extends SparkFunSuite with MLlibTestSparkContext {
+
+  def predictionError(predictions: Seq[Double], input: Seq[LabeledPoint]): Double = {
     predictions.zip(input).map { case (prediction, expected) =>
       (prediction - expected.label) * (prediction - expected.label)
-    }.reduceLeft(_ + _) / predictions.size
+    }.sum / predictions.size
   }
 
   test("ridge regression can help avoid overfitting") {
@@ -42,12 +47,12 @@ class RidgeRegressionSuite extends FunSuite with LocalSparkContext {
     val numExamples = 50
     val numFeatures = 20
 
-    org.jblas.util.Random.seed(42)
     // Pick weights as random values distributed uniformly in [-0.5, 0.5]
-    val w = DoubleMatrix.rand(numFeatures, 1).subi(0.5)
+    val random = new Random(42)
+    val w = Array.fill(numFeatures)(random.nextDouble() - 0.5)
 
     // Use half of data for training and other half for validation
-    val data = LinearDataGenerator.generateLinearInput(3.0, w.toArray, 2 * numExamples, 42, 10.0)
+    val data = LinearDataGenerator.generateLinearInput(3.0, w, 2 * numExamples, 42, 10.0)
     val testData = data.take(numExamples)
     val validationData = data.takeRight(numExamples)
 
@@ -75,9 +80,26 @@ class RidgeRegressionSuite extends FunSuite with LocalSparkContext {
     assert(ridgeErr < linearErr,
       "ridgeError (" + ridgeErr + ") was not less than linearError(" + linearErr + ")")
   }
+
+  test("model save/load") {
+    val model = RidgeRegressionSuite.model
+
+    val tempDir = Utils.createTempDir()
+    val path = tempDir.toURI.toString
+
+    // Save model, load it back, and compare.
+    try {
+      model.save(sc, path)
+      val sameModel = RidgeRegressionModel.load(sc, path)
+      assert(model.weights == sameModel.weights)
+      assert(model.intercept == sameModel.intercept)
+    } finally {
+      Utils.deleteRecursively(tempDir)
+    }
+  }
 }
 
-class RidgeRegressionClusterSuite extends FunSuite with LocalClusterSparkContext {
+class RidgeRegressionClusterSuite extends SparkFunSuite with LocalClusterSparkContext {
 
   test("task size should be small in both training and prediction") {
     val m = 4

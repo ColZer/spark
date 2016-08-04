@@ -17,11 +17,10 @@
 
 package org.apache.spark.examples;
 
-import org.apache.spark.SparkConf;
 import org.apache.spark.api.java.JavaRDD;
-import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.api.java.function.Function;
 import org.apache.spark.api.java.function.Function2;
+import org.apache.spark.sql.SparkSession;
 
 import java.io.Serializable;
 import java.util.Arrays;
@@ -30,11 +29,22 @@ import java.util.regex.Pattern;
 
 /**
  * Logistic regression based classification.
+ *
+ * This is an example implementation for learning how to use Spark. For more conventional use,
+ * please refer to org.apache.spark.ml.classification.LogisticRegression.
  */
 public final class JavaHdfsLR {
 
   private static final int D = 10;   // Number of dimensions
   private static final Random rand = new Random(42);
+
+  static void showWarning() {
+    String warning = "WARN: This is a naive implementation of Logistic Regression " +
+            "and is given as an example!\n" +
+            "Please use org.apache.spark.ml.classification.LogisticRegression " +
+            "for more conventional use.";
+    System.err.println(warning);
+  }
 
   static class DataPoint implements Serializable {
     DataPoint(double[] x, double y) {
@@ -109,9 +119,14 @@ public final class JavaHdfsLR {
       System.exit(1);
     }
 
-    SparkConf sparkConf = new SparkConf().setAppName("JavaHdfsLR");
-    JavaSparkContext sc = new JavaSparkContext(sparkConf);
-    JavaRDD<String> lines = sc.textFile(args[0]);
+    showWarning();
+
+    SparkSession spark = SparkSession
+      .builder()
+      .appName("JavaHdfsLR")
+      .getOrCreate();
+
+    JavaRDD<String> lines = spark.read().textFile(args[0]).javaRDD();
     JavaRDD<DataPoint> points = lines.map(new ParsePoint()).cache();
     int ITERATIONS = Integer.parseInt(args[1]);
 
@@ -139,6 +154,6 @@ public final class JavaHdfsLR {
 
     System.out.print("Final w: ");
     printWeights(w);
-    sc.stop();
+    spark.stop();
   }
 }

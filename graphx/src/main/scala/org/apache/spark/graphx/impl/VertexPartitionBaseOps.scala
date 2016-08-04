@@ -21,19 +21,18 @@ import scala.language.higherKinds
 import scala.language.implicitConversions
 import scala.reflect.ClassTag
 
-import org.apache.spark.Logging
-import org.apache.spark.util.collection.BitSet
-
 import org.apache.spark.graphx._
 import org.apache.spark.graphx.util.collection.GraphXPrimitiveKeyOpenHashMap
+import org.apache.spark.internal.Logging
+import org.apache.spark.util.collection.BitSet
 
 /**
- * An class containing additional operations for subclasses of VertexPartitionBase that provide
+ * A class containing additional operations for subclasses of VertexPartitionBase that provide
  * implicit evidence of membership in the `VertexPartitionBaseOpsConstructor` typeclass (for
  * example, [[VertexPartition.VertexPartitionOpsConstructor]]).
  */
 private[graphx] abstract class VertexPartitionBaseOps
-    [VD: ClassTag, Self[X] <: VertexPartitionBase[X] : VertexPartitionBaseOpsConstructor]
+    [VD: ClassTag, Self[X] <: VertexPartitionBase[X]: VertexPartitionBaseOpsConstructor]
     (self: Self[VD])
   extends Serializable with Logging {
 
@@ -86,6 +85,21 @@ private[graphx] abstract class VertexPartitionBaseOps
       i = self.mask.nextSetBit(i + 1)
     }
     this.withMask(newMask)
+  }
+
+  /** Hides the VertexId's that are the same between `this` and `other`. */
+  def minus(other: Self[VD]): Self[VD] = {
+    if (self.index != other.index) {
+      logWarning("Minus operations on two VertexPartitions with different indexes is slow.")
+      minus(createUsingIndex(other.iterator))
+    } else {
+      self.withMask(self.mask.andNot(other.mask))
+    }
+  }
+
+  /** Hides the VertexId's that are the same between `this` and `other`. */
+  def minus(other: Iterator[(VertexId, VD)]): Self[VD] = {
+    minus(createUsingIndex(other))
   }
 
   /**
@@ -238,8 +252,8 @@ private[graphx] abstract class VertexPartitionBaseOps
    * because these methods return a `Self` and this implicit conversion re-wraps that in a
    * `VertexPartitionBaseOps`. This relies on the context bound on `Self`.
    */
-  private implicit def toOps[VD2: ClassTag](
-      partition: Self[VD2]): VertexPartitionBaseOps[VD2, Self] = {
+  private implicit def toOps[VD2: ClassTag](partition: Self[VD2])
+    : VertexPartitionBaseOps[VD2, Self] = {
     implicitly[VertexPartitionBaseOpsConstructor[Self]].toOps(partition)
   }
 }

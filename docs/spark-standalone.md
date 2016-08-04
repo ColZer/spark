@@ -10,7 +10,7 @@ In addition to running on the Mesos or YARN cluster managers, Spark also provide
 
 # Installing Spark Standalone to a Cluster
 
-To install Spark Standalone mode, you simply place a compiled version of Spark on each node on the cluster. You can obtain pre-built versions of Spark with each release or [build it yourself](index.html#building).
+To install Spark Standalone mode, you simply place a compiled version of Spark on each node on the cluster. You can obtain pre-built versions of Spark with each release or [build it yourself](building-spark.html).
 
 # Starting a Cluster Manually
 
@@ -24,7 +24,7 @@ the master's web UI, which is [http://localhost:8080](http://localhost:8080) by 
 
 Similarly, you can start one or more workers and connect them to the master via:
 
-    ./bin/spark-class org.apache.spark.deploy.worker.Worker spark://IP:PORT
+    ./sbin/start-slave.sh <master-spark-URL>
 
 Once you have started a worker, look at the master's web UI ([http://localhost:8080](http://localhost:8080) by default).
 You should see the new node listed there, along with its number of CPUs and memory (minus one gigabyte left for the OS).
@@ -34,8 +34,12 @@ Finally, the following configuration options can be passed to the master and wor
 <table class="table">
   <tr><th style="width:21%">Argument</th><th>Meaning</th></tr>
   <tr>
-    <td><code>-i IP</code>, <code>--ip IP</code></td>
-    <td>IP address or DNS name to listen on</td>
+    <td><code>-h HOST</code>, <code>--host HOST</code></td>
+    <td>Hostname to listen on</td>
+  </tr>
+  <tr>
+    <td><code>-i HOST</code>, <code>--ip HOST</code></td>
+    <td>Hostname to listen on (deprecated, use -h or --host)</td>
   </tr>
   <tr>
     <td><code>-p PORT</code>, <code>--port PORT</code></td>
@@ -57,6 +61,10 @@ Finally, the following configuration options can be passed to the master and wor
     <td><code>-d DIR</code>, <code>--work-dir DIR</code></td>
     <td>Directory to use for scratch space and job output logs (default: SPARK_HOME/work); only on worker</td>
   </tr>
+  <tr>
+    <td><code>--properties-file FILE</code></td>
+    <td>Path to a custom Spark properties file to load (default: conf/spark-defaults.conf)</td>
+  </tr>
 </table>
 
 
@@ -69,10 +77,11 @@ Note, the master machine accesses each of the worker machines via ssh. By defaul
 If you do not have a password-less setup, you can set the environment variable SPARK_SSH_FOREGROUND and serially provide a password for each worker.
 
 
-Once you've set up this file, you can launch or stop your cluster with the following shell scripts, based on Hadoop's deploy scripts, and available in `SPARK_HOME/bin`:
+Once you've set up this file, you can launch or stop your cluster with the following shell scripts, based on Hadoop's deploy scripts, and available in `SPARK_HOME/sbin`:
 
 - `sbin/start-master.sh` - Starts a master instance on the machine the script is executed on.
 - `sbin/start-slaves.sh` - Starts a slave instance on each machine specified in the `conf/slaves` file.
+- `sbin/start-slave.sh` - Starts a slave instance on the machine the script is executed on.
 - `sbin/start-all.sh` - Starts both a master and a number of slaves as described above.
 - `sbin/stop-master.sh` - Stops the master that was started via the `bin/start-master.sh` script.
 - `sbin/stop-slaves.sh` - Stops all slave instances on the machines specified in the `conf/slaves` file.
@@ -85,8 +94,8 @@ You can optionally configure the cluster further by setting environment variable
 <table class="table">
   <tr><th style="width:21%">Environment Variable</th><th>Meaning</th></tr>
   <tr>
-    <td><code>SPARK_MASTER_IP</code></td>
-    <td>Bind the master to a specific IP address, for example a public one.</td>
+    <td><code>SPARK_MASTER_HOST</code></td>
+    <td>Bind the master to a specific hostname or IP address, for example a public one.</td>
   </tr>
   <tr>
     <td><code>SPARK_MASTER_PORT</code></td>
@@ -103,8 +112,8 @@ You can optionally configure the cluster further by setting environment variable
   <tr>
     <td><code>SPARK_LOCAL_DIRS</code></td>
     <td>
-    Directory to use for "scratch" space in Spark, including map output files and RDDs that get 
-    stored on disk. This should be on a fast, local disk in your system. It can also be a 
+    Directory to use for "scratch" space in Spark, including map output files and RDDs that get
+    stored on disk. This should be on a fast, local disk in your system. It can also be a
     comma-separated list of multiple directories on different disks.
     </td>
   </tr>
@@ -125,15 +134,6 @@ You can optionally configure the cluster further by setting environment variable
     <td>Port for the worker web UI (default: 8081).</td>
   </tr>
   <tr>
-    <td><code>SPARK_WORKER_INSTANCES</code></td>
-    <td>
-      Number of worker instances to run on each machine (default: 1). You can make this more than 1 if
-      you have have very large machines and would like multiple Spark worker processes. If you do set
-      this, make sure to also set <code>SPARK_WORKER_CORES</code> explicitly to limit the cores per worker,
-      or else each worker will try to use all the cores.
-    </td>
-  </tr>
-  <tr>
     <td><code>SPARK_WORKER_DIR</code></td>
     <td>Directory to run applications in, which will include both logs and scratch space (default: SPARK_HOME/work).</td>
   </tr>
@@ -143,7 +143,7 @@ You can optionally configure the cluster further by setting environment variable
   </tr>
   <tr>
     <td><code>SPARK_DAEMON_MEMORY</code></td>
-    <td>Memory to allocate to the Spark master and worker daemons themselves (default: 512m).</td>
+    <td>Memory to allocate to the Spark master and worker daemons themselves (default: 1g).</td>
   </tr>
   <tr>
     <td><code>SPARK_DAEMON_JAVA_OPTS</code></td>
@@ -214,8 +214,7 @@ SPARK_WORKER_OPTS supports the following system properties:
   <td>false</td>
   <td>
     Enable periodic cleanup of worker / application directories.  Note that this only affects standalone
-    mode, as YARN works differently. Applications directories are cleaned up regardless of whether
-    the application is still running.
+    mode, as YARN works differently. Only the directories of stopped applications are cleaned up.
   </td>
 </tr>
 <tr>
@@ -249,7 +248,7 @@ To run an interactive Spark shell against the cluster, run the following command
 
 You can also pass an option `--total-executor-cores <numCores>` to control the number of cores that spark-shell uses on the cluster.
 
-# Launching Compiled Spark Applications
+# Launching Spark Applications
 
 The [`spark-submit` script](submitting-applications.html) provides the most straightforward way to
 submit a compiled Spark application to the cluster. For standalone clusters, Spark currently
@@ -263,6 +262,15 @@ distributed to all worker nodes. For any additional jars that your application d
 should specify them through the `--jars` flag using comma as a delimiter (e.g. `--jars jar1,jar2`).
 To control the application's configuration or execution environment, see
 [Spark Configuration](configuration.html).
+
+Additionally, standalone `cluster` mode supports restarting your application automatically if it
+exited with non-zero exit code. To use this feature, you may pass in the `--supervise` flag to
+`spark-submit` when launching your application. Then, if you wish to kill an application that is
+failing repeatedly, you may do so through:
+
+    ./bin/spark-class org.apache.spark.deploy.Client kill <master url> <driver ID>
+
+You can find the driver ID through the standalone Master web UI at `http://<master url>:8080`.
 
 # Resource Scheduling
 
@@ -318,29 +326,14 @@ By default, standalone scheduling clusters are resilient to Worker failures (ins
 
 **Overview**
 
-Utilizing ZooKeeper to provide leader election and some state storage, you can launch multiple Masters in your cluster connected to the same ZooKeeper instance. One will be elected "leader" and the others will remain in standby mode. If the current leader dies, another Master will be elected, recover the old Master's state, and then resume scheduling. The entire recovery process (from the time the the first leader goes down) should take between 1 and 2 minutes. Note that this delay only affects scheduling _new_ applications -- applications that were already running during Master failover are unaffected.
+Utilizing ZooKeeper to provide leader election and some state storage, you can launch multiple Masters in your cluster connected to the same ZooKeeper instance. One will be elected "leader" and the others will remain in standby mode. If the current leader dies, another Master will be elected, recover the old Master's state, and then resume scheduling. The entire recovery process (from the time the first leader goes down) should take between 1 and 2 minutes. Note that this delay only affects scheduling _new_ applications -- applications that were already running during Master failover are unaffected.
 
 Learn more about getting started with ZooKeeper [here](http://zookeeper.apache.org/doc/trunk/zookeeperStarted.html).
 
 **Configuration**
 
-In order to enable this recovery mode, you can set SPARK_DAEMON_JAVA_OPTS in spark-env using this configuration:
-
-<table class="table">
-  <tr><th style="width:21%">System property</th><th>Meaning</th></tr>
-  <tr>
-    <td><code>spark.deploy.recoveryMode</code></td>
-    <td>Set to ZOOKEEPER to enable standby Master recovery mode (default: NONE).</td>
-  </tr>
-  <tr>
-    <td><code>spark.deploy.zookeeper.url</code></td>
-    <td>The ZooKeeper cluster url (e.g., 192.168.1.100:2181,192.168.1.101:2181).</td>
-  </tr>
-  <tr>
-    <td><code>spark.deploy.zookeeper.dir</code></td>
-    <td>The directory in ZooKeeper to store recovery state (default: /spark).</td>
-  </tr>
-</table>
+In order to enable this recovery mode, you can set SPARK_DAEMON_JAVA_OPTS in spark-env by configuring `spark.deploy.recoveryMode` and related spark.deploy.zookeeper.* configurations.
+For more information about these configurations please refer to the configurations (doc)[configurations.html#deploy]
 
 Possible gotcha: If you have multiple Masters in your cluster but fail to correctly configure the Masters to use ZooKeeper, the Masters will fail to discover each other and think they're all leaders. This will not lead to a healthy cluster state (as all Masters will schedule independently).
 

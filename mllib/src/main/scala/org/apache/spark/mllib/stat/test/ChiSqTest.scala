@@ -17,15 +17,16 @@
 
 package org.apache.spark.mllib.stat.test
 
-import breeze.linalg.{DenseMatrix => BDM}
-import cern.jet.stat.Probability.chiSquareComplemented
+import scala.collection.mutable
 
-import org.apache.spark.{SparkException, Logging}
+import breeze.linalg.{DenseMatrix => BDM}
+import org.apache.commons.math3.distribution.ChiSquaredDistribution
+
+import org.apache.spark.SparkException
+import org.apache.spark.internal.Logging
 import org.apache.spark.mllib.linalg.{Matrices, Matrix, Vector, Vectors}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.rdd.RDD
-
-import scala.collection.mutable
 
 /**
  * Conduct the chi-squared test for the input RDDs using the specified method.
@@ -33,7 +34,7 @@ import scala.collection.mutable
  * on an input of type `Matrix` in which independence between columns is assessed.
  * We also provide a method for computing the chi-squared statistic between each feature and the
  * label for an input `RDD[LabeledPoint]`, return an `Array[ChiSquaredTestResult]` of size =
- * number of features in the inpuy RDD.
+ * number of features in the input RDD.
  *
  * Supported methods for goodness of fit: `pearson` (default)
  * Supported methods for independence: `pearson` (default)
@@ -109,7 +110,9 @@ private[stat] object ChiSqTest extends Logging {
           }
           i += 1
           distinctLabels += label
-          features.toArray.view.zipWithIndex.slice(startCol, endCol).map { case (feature, col) =>
+          val brzFeatures = features.asBreeze
+          (startCol until endCol).map { col =>
+            val feature = brzFeatures(col)
             allDistinctFeatures(col) += feature
             (col, feature, label)
           }
@@ -122,7 +125,7 @@ private[stat] object ChiSqTest extends Logging {
           pairCounts.keys.filter(_._1 == startCol).map(_._3).toArray.distinct.zipWithIndex.toMap
       }
       val numLabels = labels.size
-      pairCounts.keys.groupBy(_._1).map { case (col, keys) =>
+      pairCounts.keys.groupBy(_._1).foreach { case (col, keys) =>
         val features = keys.map(_._2).toArray.distinct.zipWithIndex.toMap
         val numRows = features.size
         val contingency = new BDM(numRows, numLabels, new Array[Double](numRows * numLabels))
@@ -139,7 +142,7 @@ private[stat] object ChiSqTest extends Logging {
   }
 
   /*
-   * Pearon's goodness of fit test on the input observed and expected counts/relative frequencies.
+   * Pearson's goodness of fit test on the input observed and expected counts/relative frequencies.
    * Uniform distribution is assumed when `expected` is not passed in.
    */
   def chiSquared(observed: Vector,
@@ -188,15 +191,15 @@ private[stat] object ChiSqTest extends Logging {
       }
     }
     val df = size - 1
-    val pValue = chiSquareComplemented(df, statistic)
+    val pValue = 1.0 - new ChiSquaredDistribution(df).cumulativeProbability(statistic)
     new ChiSqTestResult(pValue, df, statistic, PEARSON.name, NullHypothesis.goodnessOfFit.toString)
   }
 
   /*
-   * Pearon's independence test on the input contingency matrix.
+   * Pearson's independence test on the input contingency matrix.
    * TODO: optimize for SparseMatrix when it becomes supported.
    */
-  def chiSquaredMatrix(counts: Matrix, methodName:String = PEARSON.name): ChiSqTestResult = {
+  def chiSquaredMatrix(counts: Matrix, methodName: String = PEARSON.name): ChiSqTestResult = {
     val method = methodFromString(methodName)
     val numRows = counts.numRows
     val numCols = counts.numCols
@@ -205,8 +208,10 @@ private[stat] object ChiSqTest extends Logging {
     val colSums = new Array[Double](numCols)
     val rowSums = new Array[Double](numRows)
     val colMajorArr = counts.toArray
+    val colMajorArrLen = colMajorArr.length
+
     var i = 0
-    while (i < colMajorArr.size) {
+    while (i < colMajorArrLen) {
       val elem = colMajorArr(i)
       if (elem < 0.0) {
         throw new IllegalArgumentException("Contingency table cannot contain negative entries.")
@@ -220,7 +225,7 @@ private[stat] object ChiSqTest extends Logging {
     // second pass to collect statistic
     var statistic = 0.0
     var j = 0
-    while (j < colMajorArr.size) {
+    while (j < colMajorArrLen) {
       val col = j / numRows
       val colSum = colSums(col)
       if (colSum == 0.0) {
@@ -238,7 +243,13 @@ private[stat] object ChiSqTest extends Logging {
       j += 1
     }
     val df = (numCols - 1) * (numRows - 1)
-    val pValue = chiSquareComplemented(df, statistic)
-    new ChiSqTestResult(pValue, df, statistic, methodName, NullHypothesis.independence.toString)
+    if (df == 0) {
+      // 1 column or 1 row. Constant distribution is independent of anything.
+      // pValue = 1.0 and statistic = 0.0 in this case.
+      new ChiSqTestResult(1.0, 0, 0.0, methodName, NullHypothesis.independence.toString)
+    } else {
+      val pValue = 1.0 - new ChiSquaredDistribution(df).cumulativeProbability(statistic)
+      new ChiSqTestResult(pValue, df, statistic, methodName, NullHypothesis.independence.toString)
+    }
   }
 }

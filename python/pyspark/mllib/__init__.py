@@ -16,11 +16,20 @@
 #
 
 """
-Python bindings for MLlib.
-"""
+RDD-based machine learning APIs for Python (in maintenance mode).
 
-# MLlib currently needs and NumPy 1.4+, so complain if lower
+The `pyspark.mllib` package is in maintenance mode as of the Spark 2.0.0 release to encourage
+migration to the DataFrame-based APIs under the `pyspark.ml` package.
+"""
+from __future__ import absolute_import
+
+# MLlib currently needs NumPy 1.4+, so complain if lower
 
 import numpy
-if numpy.version.version < '1.4':
+
+ver = [int(x) for x in numpy.version.version.split('.')[:2]]
+if ver < [1, 4]:
     raise Exception("MLlib requires NumPy 1.4+")
+
+__all__ = ['classification', 'clustering', 'feature', 'fpm', 'linalg', 'random',
+           'recommendation', 'regression', 'stat', 'tree', 'util']
