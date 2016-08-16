@@ -27,6 +27,7 @@ import org.apache.spark.sql.Dataset
 import org.apache.spark.sql.execution.columnar.InMemoryRelation
 import org.apache.spark.sql.execution.datasources.{HadoopFsRelation, LogicalRelation}
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.catalyst.catalog.CatalogRelation
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.storage.StorageLevel.MEMORY_AND_DISK
 
@@ -109,14 +110,38 @@ class CacheManager extends Logging {
    * No operation, if it's already uncached.
    */
   def uncacheQuery(query: Dataset[_], blocking: Boolean = true): Boolean = writeLock {
-    val planToCache = query.queryExecution.analyzed
-    val dataIndex = cachedData.indexWhere(cd => planToCache.sameResult(cd.plan))
-    val found = dataIndex >= 0
-    if (found) {
-      cachedData(dataIndex).cachedRepresentation.cachedColumnBuffers.unpersist(blocking)
-      cachedData.remove(dataIndex)
+    val queryPlan = query.queryExecution.analyzed
+    queryPlan match {
+      case queryRelation: CatalogRelation =>
+        val queryIdentifier = queryRelation.catalogTable.identifier
+        var index = -1
+        cachedData.zipWithIndex.filter(cacheWithIndex => {
+          cacheWithIndex._1.plan.find(_ match {
+            case relation: CatalogRelation =>
+              val cacheIdentifier = relation.catalogTable.identifier
+              cacheIdentifier.database == queryIdentifier.database &&
+                cacheIdentifier.table == queryIdentifier.table
+            case _ =>
+              false
+          }
+          ).isDefined
+        }).map(cacheWithIndex => {
+          cacheWithIndex._1.cachedRepresentation.cachedColumnBuffers.unpersist(blocking)
+          index = index + 1
+          cachedData.remove(cacheWithIndex._2 - index)
+        })
+        index >= 0
+
+      case _ =>
+        val dataIndex = cachedData.indexWhere(cd => queryPlan.sameResult(cd.plan))
+        val found = dataIndex >= 0
+        if (found) {
+          cachedData(dataIndex).cachedRepresentation.cachedColumnBuffers.unpersist(blocking)
+          cachedData.remove(dataIndex)
+        }
+        found
     }
-    found
+
   }
 
   /** Optionally returns cached data for the given [[Dataset]] */
