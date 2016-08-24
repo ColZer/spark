@@ -25,8 +25,11 @@ import org.apache.hadoop.mapreduce.lib.output.{FileOutputCommitter => MapReduceF
 import org.apache.hadoop.mapreduce.task.TaskAttemptContextImpl
 
 import org.apache.spark._
+import org.apache.spark.deploy.SparkHadoopUtil
+import org.apache.spark.executor.OutputMetrics
 import org.apache.spark.internal.Logging
 import org.apache.spark.mapred.SparkHadoopMapRedUtil
+import org.apache.spark.rdd.PairRDDFunctions
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.catalog.BucketSpec
 import org.apache.spark.sql.catalyst.expressions._
@@ -234,6 +237,30 @@ private[datasources] abstract class BaseWriterContainer(
     }
     logError(s"Job $jobId aborted.")
   }
+
+  def initHadoopOutputMetrics(taskContext: TaskContext): Option[(OutputMetrics, () => Long)] = {
+    val bytesWrittenCallback = SparkHadoopUtil.get.getFSBytesWrittenOnThreadCallback()
+    bytesWrittenCallback.map { b =>
+      (taskContext.taskMetrics().outputMetrics, b)
+    }
+  }
+
+  def maybeUpdateOutputMetrics(
+      outputMetricsAndBytesWrittenCallback: Option[(OutputMetrics, () => Long)],
+      recordsWritten: Long): Unit = {
+    if (recordsWritten % PairRDDFunctions.RECORDS_BETWEEN_BYTES_WRITTEN_METRIC_UPDATES == 0) {
+      UpdateOutputMetrics(outputMetricsAndBytesWrittenCallback, recordsWritten)
+    }
+  }
+
+  def UpdateOutputMetrics(
+       outputMetricsAndBytesWrittenCallback: Option[(OutputMetrics, () => Long)],
+       recordsWritten: Long): Unit = {
+    outputMetricsAndBytesWrittenCallback.foreach { case (om, callback) =>
+      om.setBytesWritten(callback())
+      om.setRecordsWritten(recordsWritten)
+    }
+  }
 }
 
 /**
@@ -252,14 +279,22 @@ private[datasources] class DefaultWriterContainer(
     var writer = newOutputWriter(getWorkPath)
     writer.initConverter(dataSchema)
 
+    val outputMetricsAndBytesWrittenCallback: Option[(OutputMetrics, () => Long)] =
+      initHadoopOutputMetrics(taskContext)
+
     // If anything below fails, we should abort the task.
     try {
       Utils.tryWithSafeFinallyAndFailureCallbacks {
+        var recordsWritten = 0L
         while (iterator.hasNext) {
           val internalRow = iterator.next()
           writer.writeInternal(internalRow)
+
+          maybeUpdateOutputMetrics(outputMetricsAndBytesWrittenCallback, recordsWritten)
+          recordsWritten += 1
         }
         commitTask()
+        UpdateOutputMetrics(outputMetricsAndBytesWrittenCallback, recordsWritten)
       }(catchBlock = abortTask())
     } catch {
       case t: Throwable =>
@@ -417,11 +452,16 @@ private[datasources] class DynamicPartitionWriterContainer(
 
     val sortedIterator = sorter.sortedIterator()
 
+    val outputMetricsAndBytesWrittenCallback: Option[(OutputMetrics, () => Long)] =
+      initHadoopOutputMetrics(taskContext)
+
     // If anything below fails, we should abort the task.
     var currentWriter: OutputWriter = null
     try {
       Utils.tryWithSafeFinallyAndFailureCallbacks {
         var currentKey: UnsafeRow = null
+        var recordsWritten = 0L
+
         while (sortedIterator.next()) {
           val nextKey = getBucketingKey(sortedIterator.getKey).asInstanceOf[UnsafeRow]
           if (currentKey != nextKey) {
@@ -435,6 +475,9 @@ private[datasources] class DynamicPartitionWriterContainer(
             currentWriter = newOutputWriter(currentKey, getPartitionString)
           }
           currentWriter.writeInternal(sortedIterator.getValue)
+
+          maybeUpdateOutputMetrics(outputMetricsAndBytesWrittenCallback, recordsWritten)
+          recordsWritten += 1
         }
         if (currentWriter != null) {
           currentWriter.close()
@@ -442,6 +485,7 @@ private[datasources] class DynamicPartitionWriterContainer(
         }
 
         commitTask()
+        UpdateOutputMetrics(outputMetricsAndBytesWrittenCallback, recordsWritten)
       }(catchBlock = {
         if (currentWriter != null) {
           currentWriter.close()

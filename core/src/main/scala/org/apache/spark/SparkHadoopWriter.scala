@@ -99,7 +99,9 @@ class SparkHadoopWriter(jobConf: JobConf) extends Logging with Serializable {
   }
 
   def close() {
-    writer.close(Reporter.NULL)
+    if (writer != null) {
+      writer.close(Reporter.NULL)
+    }
   }
 
   def commit() {
