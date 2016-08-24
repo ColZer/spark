@@ -241,7 +241,7 @@ class ParquetFileFormat
     }.toArray.sortBy(_.getPath.toString)
 
     FileTypes(
-      data = leaves.filterNot(f => isSummaryFile(f.getPath)),
+      data = leaves.filterNot(f => isSummaryFile(f.getPath) || f.getLen == 0),
       metadata =
         leaves.filter(_.getPath.getName == ParquetFileWriter.PARQUET_METADATA_FILE),
       commonMetadata =
